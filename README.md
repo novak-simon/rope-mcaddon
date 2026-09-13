@@ -73,14 +73,18 @@ tune them:
 - `PULL_STRENGTH` — how hard the taut-zone pull is. Too strong and it'll
   feel like being yanked; too weak and you won't notice it before hitting
   the hard limit.
+- `CLAMP_IMPULSE_STRENGTH` and `MAX_CLAMP_CORRECTION` — control how quickly
+  a player is smoothly pulled back at the hard limit. The correction uses
+  full 3D motion, so a player falling below a bridge is pulled upward too.
 
 ## Known limitations (accepted for this project's scope)
-- Bedrock predicts player movement client-side and corrects it with
-  server-side teleports, so any hard position-clamp on a player can feel a
-  little less smooth than truly native physics — this is a platform
-  limitation of the Script API, not something a script can fully erase. The
-  buffer/pull-zone changes reduce this a lot but a slight "give" at the
-  limit is expected.
+- Bedrock predicts player movement client-side, so rope impulses can still
+  receive occasional server correction. The rope uses per-tick full-vector
+  impulses instead of repeatedly teleporting the pulled player, which keeps
+  the correction smoother while retaining the buffer at the hard limit.
+- Clamp and follow destinations are checked against the player's occupied
+  space and shifted to a nearby clear position when possible. Extremely
+  enclosed spaces can still prevent a safe correction.
 - Same-dimension teleport detection is a "big position jump" heuristic —
   can misfire on legitimate very fast movement, but works for the common
   cases (ender pearls, commands).

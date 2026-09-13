@@ -7,6 +7,8 @@ import {
   MOVE_BUDGET_PER_TICK,
   CLAMP_BUFFER,
   PULL_STRENGTH,
+  CLAMP_IMPULSE_STRENGTH,
+  MAX_CLAMP_CORRECTION,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
 import { distance3D, clampToRadius } from "./vecMath.js";
@@ -43,37 +45,130 @@ function teleportPreservingFacing(player, destination, dimension) {
   }
 }
 
+function isSafePlayerPosition(dimension, position) {
+  // Check the space occupied by the player's feet, body, and head. Using
+  // several points also catches corners where a radial clamp enters a wall.
+  const samples = [
+    { x: position.x - 0.3, z: position.z - 0.3 },
+    { x: position.x - 0.3, z: position.z + 0.3 },
+    { x: position.x + 0.3, z: position.z - 0.3 },
+    { x: position.x + 0.3, z: position.z + 0.3 },
+  ];
+  const heights = [0.1, 0.9, 1.7];
+
+  try {
+    for (const sample of samples) {
+      for (const height of heights) {
+        const block = dimension.getBlock({
+          x: sample.x,
+          y: position.y + height,
+          z: sample.z,
+        });
+        if (!block || (!block.isAir && block.typeId !== "minecraft:water" && block.typeId !== "minecraft:lava")) {
+          return false;
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+function findSafePlayerPosition(dimension, position) {
+  const offsets = [
+    [0, 0, 0],
+    [0.45, 0, 0],
+    [-0.45, 0, 0],
+    [0, 0, 0.45],
+    [0, 0, -0.45],
+    [0.45, 0, 0.45],
+    [0.45, 0, -0.45],
+    [-0.45, 0, 0.45],
+    [-0.45, 0, -0.45],
+    [0, 0.5, 0],
+    [0, -0.5, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+  ];
+
+  for (const [xOffset, yOffset, zOffset] of offsets) {
+    const candidate = {
+      x: position.x + xOffset,
+      y: position.y + yOffset,
+      z: position.z + zOffset,
+    };
+    if (isSafePlayerPosition(dimension, candidate)) return candidate;
+  }
+  return undefined;
+}
+
 /**
  * Teleports `follower` to just next to `target`'s position/dimension.
- * Very small safety net only (not a full safe-spot search) per project scope.
+ * The destination is checked so a cross-dimension follow cannot place the
+ * follower inside a wall or another solid block.
  */
 function teleportFollowerTo(follower, target) {
   const targetPos = target.location;
   // Offset slightly so the follower doesn't land exactly inside the target.
-  const destination = {
+  const requested = {
     x: targetPos.x + (Math.random() < 0.5 ? 1 : -1),
     y: targetPos.y,
     z: targetPos.z + (Math.random() < 0.5 ? 1 : -1),
   };
+  const destination = findSafePlayerPosition(target.dimension, requested);
+  if (!destination) return;
   teleportPreservingFacing(follower, destination, target.dimension);
 }
 
 /**
- * Nudges `player` (standing at `fromPos`) gently toward `towardPos`, horizontally
- * only (no vertical impulse - avoids launching players into the air or messing
- * with fall state). `strength` should be small (see PULL_STRENGTH in config.js).
+ * Nudges `player` toward `towardPos` with a full-vector impulse. Including the
+ * vertical component makes a player falling below a bridge catch up promptly.
  */
 function applyInwardPull(player, fromPos, towardPos, strength) {
   const dx = towardPos.x - fromPos.x;
+  const dy = towardPos.y - fromPos.y;
   const dz = towardPos.z - fromPos.z;
-  const horizDist = Math.sqrt(dx * dx + dz * dz);
-  if (horizDist < 0.001) return; // already aligned horizontally, nothing to pull toward
-  const dirX = (dx / horizDist) * strength;
-  const dirZ = (dz / horizDist) * strength;
+  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (dist < 0.001) return;
   try {
-    player.applyKnockback({ x: dirX, z: dirZ }, 0);
+    player.applyImpulse({
+      x: (dx / dist) * strength,
+      y: (dy / dist) * strength,
+      z: (dz / dist) * strength,
+    });
   } catch {
     // Non-critical if it fails on a given tick.
+  }
+}
+
+function applyClampCorrection(player, anchorPos, heldPos) {
+  const requested = clampToRadius(anchorPos, heldPos, MAX_DISTANCE - CLAMP_BUFFER);
+  const safeTarget = findSafePlayerPosition(player.dimension, requested);
+  const target = safeTarget || requested;
+  const dx = target.x - heldPos.x;
+  const dy = target.y - heldPos.y;
+  const dz = target.z - heldPos.z;
+  const correctionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+  if (correctionDistance > 0.001) {
+    const scale = Math.min(1, MAX_CLAMP_CORRECTION / correctionDistance);
+    try {
+      player.applyImpulse({
+        x: dx * scale * CLAMP_IMPULSE_STRENGTH,
+        y: dy * scale * CLAMP_IMPULSE_STRENGTH,
+        z: dz * scale * CLAMP_IMPULSE_STRENGTH,
+      });
+    } catch {
+      // Fall back to a safe positional correction if impulse is unavailable.
+      if (safeTarget) teleportPreservingFacing(player, safeTarget, player.dimension);
+    }
+  }
+
+  // Recover a player already embedded in a block without using a raw radial
+  // destination, which was the source of the suffocation reports.
+  if (!isSafePlayerPosition(player.dimension, heldPos) && safeTarget) {
+    teleportPreservingFacing(player, safeTarget, player.dimension);
   }
 }
 
@@ -190,9 +285,7 @@ export function runRopeTick(tickCount) {
       // push distance back over MAX_DISTANCE, triggering another clamp - repeated
       // every tick, which is what produces an "invisible wall grabbing you"
       // feeling. The buffer creates a small dead zone so one clamp actually settles.
-      const clamped = clampToRadius(anchorPos, heldPos, MAX_DISTANCE - CLAMP_BUFFER);
-      teleportPreservingFacing(held, clamped, held.dimension);
-      held.clearVelocity?.(); // best-effort; may not affect Players, see README
+      applyClampCorrection(held, anchorPos, heldPos);
 
       if (!state.taut) {
         playTautSound(held);
