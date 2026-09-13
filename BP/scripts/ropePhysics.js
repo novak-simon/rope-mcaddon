@@ -11,7 +11,7 @@ import {
   MAX_CLAMP_CORRECTION,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
-import { distance3D, clampToRadius } from "./vecMath.js";
+import { distance3D } from "./vecMath.js";
 import { drawRopeParticles, playTautSound } from "./feedback.js";
 
 // Per-pair runtime state, keyed by "nameA::nameB" (sorted for stability).
@@ -122,21 +122,65 @@ function hasClearPath(dimension, fromPosition, toPosition) {
   return true;
 }
 
-function queueImpulse(pendingImpulses, player, impulse) {
+function horizontalDistance(a, b) {
+  const dx = a.x - b.x;
+  const dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
+function horizontalPointAtRadius(anchor, point, radius) {
+  const dx = point.x - anchor.x;
+  const dz = point.z - anchor.z;
+  const distance = Math.sqrt(dx * dx + dz * dz);
+  if (distance < 0.001) {
+    return { x: point.x, y: point.y, z: point.z };
+  }
+  const scale = radius / distance;
+  return {
+    x: anchor.x + dx * scale,
+    y: point.y,
+    z: anchor.z + dz * scale,
+  };
+}
+
+function queueVelocity(pendingImpulses, player, velocity) {
   const existing = pendingImpulses.get(player.id);
   if (existing) {
-    existing.x += impulse.x;
-    existing.y += impulse.y;
-    existing.z += impulse.z;
+    existing.x += velocity.x;
+    existing.y += velocity.y;
+    existing.z += velocity.z;
+    existing.count += 1;
     return;
   }
-  pendingImpulses.set(player.id, { player, x: impulse.x, y: impulse.y, z: impulse.z });
+  pendingImpulses.set(player.id, {
+    player,
+    x: velocity.x,
+    y: velocity.y,
+    z: velocity.z,
+    count: 1,
+  });
 }
 
 function applyPendingImpulses(pendingImpulses) {
-  for (const { player, x, y, z } of pendingImpulses.values()) {
+  for (const { player, x, y, z, count } of pendingImpulses.values()) {
     try {
-      player.applyImpulse({ x, y, z });
+      const currentVelocity = player.getVelocity();
+      const desiredX = x / count;
+      const desiredZ = z / count;
+      const desiredSpeed = Math.sqrt(desiredX * desiredX + desiredZ * desiredZ);
+      if (desiredSpeed < 0.001) continue;
+      const directionX = desiredX / desiredSpeed;
+      const directionZ = desiredZ / desiredSpeed;
+      const currentAlongRope = currentVelocity.x * directionX + currentVelocity.z * directionZ;
+      const correction = Math.max(
+        -MAX_CLAMP_CORRECTION,
+        Math.min(MAX_CLAMP_CORRECTION, desiredSpeed - currentAlongRope)
+      );
+      player.applyImpulse({
+        x: directionX * correction,
+        y: 0,
+        z: directionZ * correction,
+      });
     } catch {
       // Non-critical if a player becomes invalid during this tick.
     }
@@ -162,10 +206,10 @@ function teleportFollowerTo(follower, target) {
 }
 
 /**
- * Nudges `player` toward `towardPos` with a full-vector impulse. Including the
- * vertical component makes a player falling below a bridge catch up promptly.
+ * Requests a horizontal rope velocity. Vertical movement is left to gravity,
+ * jumping, and normal collision so the rope does not pull feet off the ground.
  */
-function applyInwardPull(pendingImpulses, player, fromPos, towardPos, strength) {
+function applyRopeVelocity(pendingImpulses, player, fromPos, towardPos, desiredSpeed) {
   if (!isSafePlayerPosition(player.dimension, fromPos)) {
     const recoveryPosition = findSafePlayerPosition(player.dimension, fromPos);
     if (recoveryPosition) {
@@ -175,40 +219,44 @@ function applyInwardPull(pendingImpulses, player, fromPos, towardPos, strength) 
     return;
   }
   const dx = towardPos.x - fromPos.x;
-  const dy = towardPos.y - fromPos.y;
   const dz = towardPos.z - fromPos.z;
-  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  if (dist < 0.001) return;
-  const stepDistance = Math.min(strength, dist);
+  const distance = Math.sqrt(dx * dx + dz * dz);
+  if (distance < 0.001) return;
+  const stepDistance = Math.min(desiredSpeed, distance);
   const stepTarget = {
-    x: fromPos.x + (dx / dist) * stepDistance,
-    y: fromPos.y + (dy / dist) * stepDistance,
-    z: fromPos.z + (dz / dist) * stepDistance,
+    x: fromPos.x + (dx / distance) * stepDistance,
+    y: fromPos.y,
+    z: fromPos.z + (dz / distance) * stepDistance,
   };
   if (!hasClearPath(player.dimension, fromPos, stepTarget)) return;
-  queueImpulse(pendingImpulses, player, {
-    x: (dx / dist) * strength,
-    y: (dy / dist) * strength,
-    z: (dz / dist) * strength,
+
+  queueVelocity(pendingImpulses, player, {
+    x: (dx / distance) * desiredSpeed,
+    y: 0,
+    z: (dz / distance) * desiredSpeed,
   });
 }
 
 function applyClampCorrection(pendingImpulses, player, anchorPos, heldPos) {
-  const requested = clampToRadius(anchorPos, heldPos, MAX_DISTANCE - CLAMP_BUFFER);
+  const horizontalDistanceFromAnchor = horizontalDistance(anchorPos, heldPos);
+  const requested = horizontalPointAtRadius(
+    anchorPos,
+    heldPos,
+    MAX_DISTANCE - CLAMP_BUFFER
+  );
   const safeTarget = findSafePlayerPosition(player.dimension, requested);
   const target = safeTarget || requested;
   const dx = target.x - heldPos.x;
-  const dy = target.y - heldPos.y;
   const dz = target.z - heldPos.z;
-  const correctionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const correctionDistance = Math.sqrt(dx * dx + dz * dz);
 
   if (correctionDistance > 0.001 && hasClearPath(player.dimension, heldPos, target)) {
-    const scale = Math.min(1, MAX_CLAMP_CORRECTION / correctionDistance);
-    queueImpulse(pendingImpulses, player, {
-      x: dx * scale * CLAMP_IMPULSE_STRENGTH,
-      y: dy * scale * CLAMP_IMPULSE_STRENGTH,
-      z: dz * scale * CLAMP_IMPULSE_STRENGTH,
-    });
+    const correctionSpeed = Math.min(
+      MAX_CLAMP_CORRECTION,
+      Math.max(0, horizontalDistanceFromAnchor - (MAX_DISTANCE - CLAMP_BUFFER)) *
+        CLAMP_IMPULSE_STRENGTH
+    );
+    applyRopeVelocity(pendingImpulses, player, heldPos, target, correctionSpeed);
   }
 
   // Recover a player already embedded in a block without applying another
@@ -304,7 +352,9 @@ export function runRopeTick(tickCount) {
       continue;
     }
 
-    if (dist > MAX_DISTANCE) {
+    const horizontalDist = horizontalDistance(posA, posB);
+
+    if (horizontalDist > MAX_DISTANCE) {
       const anchorInfo = resolveAnchor(playerA, playerB, posA, posB);
 
       let held; // the player who gets clamped this tick
@@ -329,34 +379,36 @@ export function runRopeTick(tickCount) {
         heldPos = aIsActive ? posB : posA;
       }
 
-      // Land slightly INSIDE the max radius (not exactly on it). Landing exactly
-      // on the boundary means the very next tick's tiny movement/float jitter can
-      // push distance back over MAX_DISTANCE, triggering another clamp - repeated
-      // every tick, which is what produces an "invisible wall grabbing you"
-      // feeling. The buffer creates a small dead zone so one clamp actually settles.
+      // Hold slightly INSIDE the horizontal max radius. The buffer creates a
+      // small dead zone so float jitter does not repeatedly re-trigger tension.
       applyClampCorrection(pendingImpulses, held, anchorPos, heldPos);
 
       if (!state.taut) {
         playTautSound(held);
         state.taut = true;
       }
-    } else if (dist > SLACK_DISTANCE) {
+    } else if (horizontalDist > SLACK_DISTANCE) {
       // Taut zone: no hard clamp yet, but the rope should feel like it's
       // resisting. Depth scales 0 (at SLACK_DISTANCE) to 1 (at MAX_DISTANCE).
-      const depth = (dist - SLACK_DISTANCE) / (MAX_DISTANCE - SLACK_DISTANCE);
+      const depth = (horizontalDist - SLACK_DISTANCE) / (MAX_DISTANCE - SLACK_DISTANCE);
       const pull = PULL_STRENGTH * depth;
 
       const anchorInfo = resolveAnchor(playerA, playerB, posA, posB);
       if (anchorInfo) {
         // Only the non-anchored player feels the pull - the bracing player
         // holds firm and isn't nudged at all.
-        applyInwardPull(pendingImpulses, anchorInfo.other, anchorInfo.otherPos, anchorInfo.anchorPos, pull);
+        const target = {
+          x: anchorInfo.anchorPos.x,
+          y: anchorInfo.otherPos.y,
+          z: anchorInfo.anchorPos.z,
+        };
+        applyRopeVelocity(pendingImpulses, anchorInfo.other, anchorInfo.otherPos, target, pull);
       } else if (playerA.isSneaking && playerB.isSneaking) {
         // Both bracing - tension held, nobody nudged.
       } else {
         // Default: symmetric tug, both players feel a gentle pull toward each other.
-        applyInwardPull(pendingImpulses, playerA, posA, posB, pull);
-        applyInwardPull(pendingImpulses, playerB, posB, posA, pull);
+        applyRopeVelocity(pendingImpulses, playerA, posA, { x: posB.x, y: posA.y, z: posB.z }, pull);
+        applyRopeVelocity(pendingImpulses, playerB, posB, { x: posA.x, y: posB.y, z: posA.z }, pull);
       }
 
       if (!state.taut) {

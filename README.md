@@ -90,6 +90,10 @@ tune them:
   position exists; the rope never uses force to push their feet, body, or head
   through solid blocks. A sealed one-block hole therefore requires a
   separate teleport or manual escape.
+- Normal rope movement is horizontal and velocity-based. It keeps the player
+  inside the rope's horizontal radius while leaving Y movement to gravity,
+  jumping, and ground collision, so the rope does not pull a player's feet
+  directly toward the other player's height.
 - Same-dimension teleport detection is a "big position jump" heuristic —
   can misfire on legitimate very fast movement, but works for the common
   cases (ender pearls, commands).
