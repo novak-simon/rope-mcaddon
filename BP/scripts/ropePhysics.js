@@ -122,23 +122,18 @@ function hasClearPath(dimension, fromPosition, toPosition) {
   return true;
 }
 
-function horizontalDistance(a, b) {
-  const dx = a.x - b.x;
-  const dz = a.z - b.z;
-  return Math.sqrt(dx * dx + dz * dz);
-}
-
-function horizontalPointAtRadius(anchor, point, radius) {
+function pointAtRadius(anchor, point, radius) {
   const dx = point.x - anchor.x;
+  const dy = point.y - anchor.y;
   const dz = point.z - anchor.z;
-  const distance = Math.sqrt(dx * dx + dz * dz);
-  if (distance < 0.001) {
+  const fullDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (fullDistance < 0.001) {
     return { x: point.x, y: point.y, z: point.z };
   }
-  const scale = radius / distance;
+  const scale = radius / fullDistance;
   return {
     x: anchor.x + dx * scale,
-    y: point.y,
+    y: anchor.y + dy * scale,
     z: anchor.z + dz * scale,
   };
 }
@@ -166,19 +161,26 @@ function applyPendingImpulses(pendingImpulses) {
     try {
       const currentVelocity = player.getVelocity();
       const desiredX = x / count;
+      const desiredY = y / count;
       const desiredZ = z / count;
-      const desiredSpeed = Math.sqrt(desiredX * desiredX + desiredZ * desiredZ);
+      const desiredSpeed = Math.sqrt(
+        desiredX * desiredX + desiredY * desiredY + desiredZ * desiredZ
+      );
       if (desiredSpeed < 0.001) continue;
       const directionX = desiredX / desiredSpeed;
+      const directionY = desiredY / desiredSpeed;
       const directionZ = desiredZ / desiredSpeed;
-      const currentAlongRope = currentVelocity.x * directionX + currentVelocity.z * directionZ;
+      const currentAlongRope =
+        currentVelocity.x * directionX +
+        currentVelocity.y * directionY +
+        currentVelocity.z * directionZ;
       const correction = Math.max(
         -MAX_CLAMP_CORRECTION,
         Math.min(MAX_CLAMP_CORRECTION, desiredSpeed - currentAlongRope)
       );
       player.applyImpulse({
         x: directionX * correction,
-        y: 0,
+        y: directionY * correction,
         z: directionZ * correction,
       });
     } catch {
@@ -206,8 +208,8 @@ function teleportFollowerTo(follower, target) {
 }
 
 /**
- * Requests a horizontal rope velocity. Vertical movement is left to gravity,
- * jumping, and normal collision so the rope does not pull feet off the ground.
+ * Requests a velocity toward the other end of the rope. Vertical correction
+ * only appears when the full 3D tether is taut, allowing natural swinging.
  */
 function applyRopeVelocity(pendingImpulses, player, fromPos, towardPos, desiredSpeed) {
   if (!isSafePlayerPosition(player.dimension, fromPos)) {
@@ -219,27 +221,28 @@ function applyRopeVelocity(pendingImpulses, player, fromPos, towardPos, desiredS
     return;
   }
   const dx = towardPos.x - fromPos.x;
+  const dy = towardPos.y - fromPos.y;
   const dz = towardPos.z - fromPos.z;
-  const distance = Math.sqrt(dx * dx + dz * dz);
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
   if (distance < 0.001) return;
   const stepDistance = Math.min(desiredSpeed, distance);
   const stepTarget = {
     x: fromPos.x + (dx / distance) * stepDistance,
-    y: fromPos.y,
+    y: fromPos.y + (dy / distance) * stepDistance,
     z: fromPos.z + (dz / distance) * stepDistance,
   };
   if (!hasClearPath(player.dimension, fromPos, stepTarget)) return;
 
   queueVelocity(pendingImpulses, player, {
     x: (dx / distance) * desiredSpeed,
-    y: 0,
+    y: (dy / distance) * desiredSpeed,
     z: (dz / distance) * desiredSpeed,
   });
 }
 
 function applyClampCorrection(pendingImpulses, player, anchorPos, heldPos) {
-  const horizontalDistanceFromAnchor = horizontalDistance(anchorPos, heldPos);
-  const requested = horizontalPointAtRadius(
+  const distanceFromAnchor = distance3D(anchorPos, heldPos);
+  const requested = pointAtRadius(
     anchorPos,
     heldPos,
     MAX_DISTANCE - CLAMP_BUFFER
@@ -248,12 +251,13 @@ function applyClampCorrection(pendingImpulses, player, anchorPos, heldPos) {
   const target = safeTarget || requested;
   const dx = target.x - heldPos.x;
   const dz = target.z - heldPos.z;
-  const correctionDistance = Math.sqrt(dx * dx + dz * dz);
+  const dy = target.y - heldPos.y;
+  const correctionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
   if (correctionDistance > 0.001 && hasClearPath(player.dimension, heldPos, target)) {
     const correctionSpeed = Math.min(
       MAX_CLAMP_CORRECTION,
-      Math.max(0, horizontalDistanceFromAnchor - (MAX_DISTANCE - CLAMP_BUFFER)) *
+      Math.max(0, distanceFromAnchor - (MAX_DISTANCE - CLAMP_BUFFER)) *
         CLAMP_IMPULSE_STRENGTH
     );
     applyRopeVelocity(pendingImpulses, player, heldPos, target, correctionSpeed);
@@ -352,9 +356,9 @@ export function runRopeTick(tickCount) {
       continue;
     }
 
-    const horizontalDist = horizontalDistance(posA, posB);
+    const ropeDistance = distance3D(posA, posB);
 
-    if (horizontalDist > MAX_DISTANCE) {
+    if (ropeDistance > MAX_DISTANCE) {
       const anchorInfo = resolveAnchor(playerA, playerB, posA, posB);
 
       let held; // the player who gets clamped this tick
@@ -379,7 +383,7 @@ export function runRopeTick(tickCount) {
         heldPos = aIsActive ? posB : posA;
       }
 
-      // Hold slightly INSIDE the horizontal max radius. The buffer creates a
+      // Hold slightly INSIDE the spherical max radius. The buffer creates a
       // small dead zone so float jitter does not repeatedly re-trigger tension.
       applyClampCorrection(pendingImpulses, held, anchorPos, heldPos);
 
@@ -387,28 +391,29 @@ export function runRopeTick(tickCount) {
         playTautSound(held);
         state.taut = true;
       }
-    } else if (horizontalDist > SLACK_DISTANCE) {
-      // Taut zone: no hard clamp yet, but the rope should feel like it's
-      // resisting. Depth scales 0 (at SLACK_DISTANCE) to 1 (at MAX_DISTANCE).
-      const depth = (horizontalDist - SLACK_DISTANCE) / (MAX_DISTANCE - SLACK_DISTANCE);
+    } else if (ropeDistance > SLACK_DISTANCE) {
+      // Taut zone: gravity can pull a player down naturally, then the rope
+      // supplies an inward/upward velocity as the full tether tightens.
+      const depth = (ropeDistance - SLACK_DISTANCE) / (MAX_DISTANCE - SLACK_DISTANCE);
       const pull = PULL_STRENGTH * depth;
 
       const anchorInfo = resolveAnchor(playerA, playerB, posA, posB);
       if (anchorInfo) {
         // Only the non-anchored player feels the pull - the bracing player
         // holds firm and isn't nudged at all.
-        const target = {
-          x: anchorInfo.anchorPos.x,
-          y: anchorInfo.otherPos.y,
-          z: anchorInfo.anchorPos.z,
-        };
-        applyRopeVelocity(pendingImpulses, anchorInfo.other, anchorInfo.otherPos, target, pull);
+        applyRopeVelocity(
+          pendingImpulses,
+          anchorInfo.other,
+          anchorInfo.otherPos,
+          anchorInfo.anchorPos,
+          pull
+        );
       } else if (playerA.isSneaking && playerB.isSneaking) {
         // Both bracing - tension held, nobody nudged.
       } else {
         // Default: symmetric tug, both players feel a gentle pull toward each other.
-        applyRopeVelocity(pendingImpulses, playerA, posA, { x: posB.x, y: posA.y, z: posB.z }, pull);
-        applyRopeVelocity(pendingImpulses, playerB, posB, { x: posA.x, y: posB.y, z: posA.z }, pull);
+        applyRopeVelocity(pendingImpulses, playerA, posA, posB, pull);
+        applyRopeVelocity(pendingImpulses, playerB, posB, posA, pull);
       }
 
       if (!state.taut) {
