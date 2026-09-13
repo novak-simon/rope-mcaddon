@@ -9,6 +9,8 @@ import {
   PULL_STRENGTH,
   CLAMP_IMPULSE_STRENGTH,
   MAX_CLAMP_CORRECTION,
+  SWING_VERTICAL_STRENGTH,
+  INWARD_VELOCITY_DAMPING,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
 import { distance3D } from "./vecMath.js";
@@ -176,7 +178,13 @@ function applyPendingImpulses(pendingImpulses) {
         currentVelocity.z * directionZ;
       const correction = Math.max(
         -MAX_CLAMP_CORRECTION,
-        Math.min(MAX_CLAMP_CORRECTION, desiredSpeed - currentAlongRope)
+        Math.min(
+          MAX_CLAMP_CORRECTION,
+          desiredSpeed -
+            (currentAlongRope < 0
+              ? currentAlongRope
+              : currentAlongRope * INWARD_VELOCITY_DAMPING)
+        )
       );
       player.applyImpulse({
         x: directionX * correction,
@@ -211,7 +219,14 @@ function teleportFollowerTo(follower, target) {
  * Requests a velocity toward the other end of the rope. Vertical correction
  * only appears when the full 3D tether is taut, allowing natural swinging.
  */
-function applyRopeVelocity(pendingImpulses, player, fromPos, towardPos, desiredSpeed) {
+function applyRopeVelocity(
+  pendingImpulses,
+  player,
+  fromPos,
+  towardPos,
+  desiredSpeed,
+  verticalStrength = 1
+) {
   if (!isSafePlayerPosition(player.dimension, fromPos)) {
     const recoveryPosition = findSafePlayerPosition(player.dimension, fromPos);
     if (recoveryPosition) {
@@ -235,7 +250,7 @@ function applyRopeVelocity(pendingImpulses, player, fromPos, towardPos, desiredS
 
   queueVelocity(pendingImpulses, player, {
     x: (dx / distance) * desiredSpeed,
-    y: (dy / distance) * desiredSpeed,
+    y: (dy / distance) * desiredSpeed * verticalStrength,
     z: (dz / distance) * desiredSpeed,
   });
 }
@@ -406,14 +421,15 @@ export function runRopeTick(tickCount) {
           anchorInfo.other,
           anchorInfo.otherPos,
           anchorInfo.anchorPos,
-          pull
+          pull,
+          SWING_VERTICAL_STRENGTH
         );
       } else if (playerA.isSneaking && playerB.isSneaking) {
         // Both bracing - tension held, nobody nudged.
       } else {
         // Default: symmetric tug, both players feel a gentle pull toward each other.
-        applyRopeVelocity(pendingImpulses, playerA, posA, posB, pull);
-        applyRopeVelocity(pendingImpulses, playerB, posB, posA, pull);
+        applyRopeVelocity(pendingImpulses, playerA, posA, posB, pull, SWING_VERTICAL_STRENGTH);
+        applyRopeVelocity(pendingImpulses, playerB, posB, posA, pull, SWING_VERTICAL_STRENGTH);
       }
 
       if (!state.taut) {

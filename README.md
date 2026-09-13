@@ -76,6 +76,12 @@ tune them:
 - `CLAMP_IMPULSE_STRENGTH` and `MAX_CLAMP_CORRECTION` — control how quickly
   a player is smoothly pulled back at the hard limit. The correction uses
   full 3D motion, so a player falling below a bridge is pulled upward too.
+- `SWING_VERTICAL_STRENGTH` and `INWARD_VELOCITY_DAMPING` — control the
+  airborne swing. Higher vertical strength gives a larger up/down arc;
+  lower damping preserves more inward momentum and makes the swing carry
+  farther.
+- `PARTICLE_ENDPOINT_OFFSET` and `PARTICLE_BODY_HEIGHT` — keep the visible
+  particle rope away from player hitboxes and attach it around torso height.
 
 ## Known limitations (accepted for this project's scope)
 - Bedrock predicts player movement client-side, so rope impulses can still
