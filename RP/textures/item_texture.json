@@ -1,0 +1,9 @@
+{
+  "resource_pack_name": "rope_addon",
+  "texture_name": "atlas.items",
+  "texture_data": {
+    "rope_tether_item": {
+      "textures": "textures/items/rope_tether_item"
+    }
+  }
+}

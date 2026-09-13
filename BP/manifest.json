@@ -1,0 +1,33 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Rope Addon",
+    "description": "Ties two (or more) players together with a rope that behaves like a real physical tether.",
+    "uuid": "c804a1ac-a9b0-405c-a961-fc0cdaa22ee7",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 0]
+  },
+  "modules": [
+    {
+      "type": "data",
+      "uuid": "36fa088c-977b-45e3-bc5d-d17b14c56c02",
+      "version": [1, 0, 0]
+    },
+    {
+      "type": "script",
+      "language": "javascript",
+      "uuid": "5f378c61-a33b-4444-98da-38fceaa7722d",
+      "version": [1, 0, 0],
+      "entry": "scripts/main.js"
+    }
+  ],
+  "dependencies": [
+    {
+      "module_name": "@minecraft/server",
+      "version": "1.14.0"
+    }
+  ],
+  "metadata": {
+    "authors": ["shaasha57"]
+  }
+}

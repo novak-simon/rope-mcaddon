@@ -1,0 +1,26 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Rope Addon (Textures)",
+    "description": "Item texture for the Rope Addon.",
+    "uuid": "0aaa53b8-2d38-45d2-8084-b3517013d52c",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 0]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "28a8a3ea-1588-4adb-a4cb-b6112b0eb867",
+      "version": [1, 0, 0]
+    }
+  ],
+  "dependencies": [
+    {
+      "uuid": "c804a1ac-a9b0-405c-a961-fc0cdaa22ee7",
+      "version": [1, 0, 0]
+    }
+  ],
+  "metadata": {
+    "authors": ["shaasha57"]
+  }
+}
