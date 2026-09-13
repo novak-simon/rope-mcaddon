@@ -1,7 +1,7 @@
 # Rope Addon — install & usage
 
 ## Install
-1. Import `rope_addon.mcaddon` (double-tap it, or use "Import" from within
+1. Import `rope_1.0.mcaddon` (double-tap it, or use "Import" from within
    Minecraft). It contains two packs — a Behavior Pack (the logic) and a
    Resource Pack (the item texture) — both need to end up applied to your
    world. If double-tap import doesn't work, copy the `BP` folder into your
