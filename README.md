@@ -85,6 +85,11 @@ tune them:
 - Clamp and follow destinations are checked against the player's occupied
   space and shifted to a nearby clear position when possible. Extremely
   enclosed spaces can still prevent a safe correction.
+- Rope impulses are combined per player before being applied. If a player is
+  already inside a block, rope movement is suspended until a clear recovery
+  position exists; the rope never uses force to push their feet, body, or head
+  through solid blocks. A sealed one-block hole therefore requires a
+  separate teleport or manual escape.
 - Same-dimension teleport detection is a "big position jump" heuristic —
   can misfire on legitimate very fast movement, but works for the common
   cases (ender pearls, commands).

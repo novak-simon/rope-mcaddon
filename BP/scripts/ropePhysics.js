@@ -103,6 +103,46 @@ function findSafePlayerPosition(dimension, position) {
   return undefined;
 }
 
+function hasClearPath(dimension, fromPosition, toPosition) {
+  const dx = toPosition.x - fromPosition.x;
+  const dy = toPosition.y - fromPosition.y;
+  const dz = toPosition.z - fromPosition.z;
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const steps = Math.max(1, Math.ceil(distance / 0.25));
+
+  for (let step = 1; step <= steps; step++) {
+    const progress = step / steps;
+    const position = {
+      x: fromPosition.x + dx * progress,
+      y: fromPosition.y + dy * progress,
+      z: fromPosition.z + dz * progress,
+    };
+    if (!isSafePlayerPosition(dimension, position)) return false;
+  }
+  return true;
+}
+
+function queueImpulse(pendingImpulses, player, impulse) {
+  const existing = pendingImpulses.get(player.id);
+  if (existing) {
+    existing.x += impulse.x;
+    existing.y += impulse.y;
+    existing.z += impulse.z;
+    return;
+  }
+  pendingImpulses.set(player.id, { player, x: impulse.x, y: impulse.y, z: impulse.z });
+}
+
+function applyPendingImpulses(pendingImpulses) {
+  for (const { player, x, y, z } of pendingImpulses.values()) {
+    try {
+      player.applyImpulse({ x, y, z });
+    } catch {
+      // Non-critical if a player becomes invalid during this tick.
+    }
+  }
+}
+
 /**
  * Teleports `follower` to just next to `target`'s position/dimension.
  * The destination is checked so a cross-dimension follow cannot place the
@@ -125,24 +165,35 @@ function teleportFollowerTo(follower, target) {
  * Nudges `player` toward `towardPos` with a full-vector impulse. Including the
  * vertical component makes a player falling below a bridge catch up promptly.
  */
-function applyInwardPull(player, fromPos, towardPos, strength) {
+function applyInwardPull(pendingImpulses, player, fromPos, towardPos, strength) {
+  if (!isSafePlayerPosition(player.dimension, fromPos)) {
+    const recoveryPosition = findSafePlayerPosition(player.dimension, fromPos);
+    if (recoveryPosition) {
+      pendingImpulses.delete(player.id);
+      teleportPreservingFacing(player, recoveryPosition, player.dimension);
+    }
+    return;
+  }
   const dx = towardPos.x - fromPos.x;
   const dy = towardPos.y - fromPos.y;
   const dz = towardPos.z - fromPos.z;
   const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
   if (dist < 0.001) return;
-  try {
-    player.applyImpulse({
-      x: (dx / dist) * strength,
-      y: (dy / dist) * strength,
-      z: (dz / dist) * strength,
-    });
-  } catch {
-    // Non-critical if it fails on a given tick.
-  }
+  const stepDistance = Math.min(strength, dist);
+  const stepTarget = {
+    x: fromPos.x + (dx / dist) * stepDistance,
+    y: fromPos.y + (dy / dist) * stepDistance,
+    z: fromPos.z + (dz / dist) * stepDistance,
+  };
+  if (!hasClearPath(player.dimension, fromPos, stepTarget)) return;
+  queueImpulse(pendingImpulses, player, {
+    x: (dx / dist) * strength,
+    y: (dy / dist) * strength,
+    z: (dz / dist) * strength,
+  });
 }
 
-function applyClampCorrection(player, anchorPos, heldPos) {
+function applyClampCorrection(pendingImpulses, player, anchorPos, heldPos) {
   const requested = clampToRadius(anchorPos, heldPos, MAX_DISTANCE - CLAMP_BUFFER);
   const safeTarget = findSafePlayerPosition(player.dimension, requested);
   const target = safeTarget || requested;
@@ -151,23 +202,20 @@ function applyClampCorrection(player, anchorPos, heldPos) {
   const dz = target.z - heldPos.z;
   const correctionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-  if (correctionDistance > 0.001) {
+  if (correctionDistance > 0.001 && hasClearPath(player.dimension, heldPos, target)) {
     const scale = Math.min(1, MAX_CLAMP_CORRECTION / correctionDistance);
-    try {
-      player.applyImpulse({
-        x: dx * scale * CLAMP_IMPULSE_STRENGTH,
-        y: dy * scale * CLAMP_IMPULSE_STRENGTH,
-        z: dz * scale * CLAMP_IMPULSE_STRENGTH,
-      });
-    } catch {
-      // Fall back to a safe positional correction if impulse is unavailable.
-      if (safeTarget) teleportPreservingFacing(player, safeTarget, player.dimension);
-    }
+    queueImpulse(pendingImpulses, player, {
+      x: dx * scale * CLAMP_IMPULSE_STRENGTH,
+      y: dy * scale * CLAMP_IMPULSE_STRENGTH,
+      z: dz * scale * CLAMP_IMPULSE_STRENGTH,
+    });
   }
 
-  // Recover a player already embedded in a block without using a raw radial
-  // destination, which was the source of the suffocation reports.
+  // Recover a player already embedded in a block without applying another
+  // impulse. If no safe position exists, such as a sealed one-block hole,
+  // leave them in place rather than forcing them through the enclosure.
   if (!isSafePlayerPosition(player.dimension, heldPos) && safeTarget) {
+    pendingImpulses.delete(player.id);
     teleportPreservingFacing(player, safeTarget, player.dimension);
   }
 }
@@ -195,6 +243,7 @@ function resolveAnchor(playerA, playerB, posA, posB) {
 export function runRopeTick(tickCount) {
   const pairs = getAllPairs();
   const moveBudget = new Map(); // name -> teleports caused this tick, safety cap for chains
+  const pendingImpulses = new Map();
 
   for (const [nameA, nameB] of pairs) {
     const playerA = getPlayerByName(nameA);
@@ -285,7 +334,7 @@ export function runRopeTick(tickCount) {
       // push distance back over MAX_DISTANCE, triggering another clamp - repeated
       // every tick, which is what produces an "invisible wall grabbing you"
       // feeling. The buffer creates a small dead zone so one clamp actually settles.
-      applyClampCorrection(held, anchorPos, heldPos);
+      applyClampCorrection(pendingImpulses, held, anchorPos, heldPos);
 
       if (!state.taut) {
         playTautSound(held);
@@ -301,13 +350,13 @@ export function runRopeTick(tickCount) {
       if (anchorInfo) {
         // Only the non-anchored player feels the pull - the bracing player
         // holds firm and isn't nudged at all.
-        applyInwardPull(anchorInfo.other, anchorInfo.otherPos, anchorInfo.anchorPos, pull);
+        applyInwardPull(pendingImpulses, anchorInfo.other, anchorInfo.otherPos, anchorInfo.anchorPos, pull);
       } else if (playerA.isSneaking && playerB.isSneaking) {
         // Both bracing - tension held, nobody nudged.
       } else {
         // Default: symmetric tug, both players feel a gentle pull toward each other.
-        applyInwardPull(playerA, posA, posB, pull);
-        applyInwardPull(playerB, posB, posA, pull);
+        applyInwardPull(pendingImpulses, playerA, posA, posB, pull);
+        applyInwardPull(pendingImpulses, playerB, posB, posA, pull);
       }
 
       if (!state.taut) {
@@ -326,6 +375,8 @@ export function runRopeTick(tickCount) {
     state.lastPosA = playerA.location;
     state.lastPosB = playerB.location;
   }
+
+  applyPendingImpulses(pendingImpulses);
 }
 
 /** Call when a rope pair is removed elsewhere, to drop its stale runtime state. */
