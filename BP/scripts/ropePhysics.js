@@ -4,8 +4,6 @@ import {
   TELEPORT_JUMP_THRESHOLD,
   PARTICLE_INTERVAL_TICKS,
   MOVE_BUDGET_PER_TICK,
-  CLAMP_BUFFER,
-  POSITION_CORRECTION_THRESHOLD,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
 import { distance3D } from "./vecMath.js";
@@ -105,53 +103,6 @@ function findSafePlayerPosition(dimension, position) {
   return undefined;
 }
 
-function hasClearPath(dimension, fromPosition, toPosition) {
-  const dx = toPosition.x - fromPosition.x;
-  const dy = toPosition.y - fromPosition.y;
-  const dz = toPosition.z - fromPosition.z;
-  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  const steps = Math.max(1, Math.ceil(distance / 0.25));
-
-  for (let step = 1; step <= steps; step++) {
-    const progress = step / steps;
-    const position = {
-      x: fromPosition.x + dx * progress,
-      y: fromPosition.y + dy * progress,
-      z: fromPosition.z + dz * progress,
-    };
-    if (!isSafePlayerPosition(dimension, position)) return false;
-  }
-  return true;
-}
-
-function pointAtRadius(anchor, point, radius) {
-  const dx = point.x - anchor.x;
-  const dy = point.y - anchor.y;
-  const dz = point.z - anchor.z;
-  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  if (distance < 0.001) return { x: point.x, y: point.y, z: point.z };
-
-  const scale = radius / distance;
-  return {
-    x: anchor.x + dx * scale,
-    y: anchor.y + dy * scale,
-    z: anchor.z + dz * scale,
-  };
-}
-
-function moveToward(from, toward, distance) {
-  const dx = toward.x - from.x;
-  const dy = toward.y - from.y;
-  const dz = toward.z - from.z;
-  const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  if (length < 0.001) return { x: from.x, y: from.y, z: from.z };
-  return {
-    x: from.x + (dx / length) * distance,
-    y: from.y + (dy / length) * distance,
-    z: from.z + (dz / length) * distance,
-  };
-}
-
 function queueImpulse(pendingImpulses, player, impulse) {
   const existing = pendingImpulses.get(player.id);
   if (existing) {
@@ -188,66 +139,6 @@ function teleportFollowerTo(follower, target) {
   if (destination) {
     teleportPreservingFacing(follower, destination, target.dimension);
   }
-}
-
-/**
- * Apply the small positional fallback needed when a tick has already left the
- * pair beyond the hard limit. Normal movement is constrained by impulses; a
- * teleport is only used here to remove an existing violation and is kept
- * slightly inside the limit to avoid floating-point re-triggering.
- *
- * Returns true when a correction was requested, so the caller does not also
- * apply a velocity constraint to positions that are being relocated.
- */
-function correctExceededDistance(playerA, playerB, posA, posB) {
-  const distance = distance3D(posA, posB);
-  const excess = distance - MAX_DISTANCE;
-  if (excess <= POSITION_CORRECTION_THRESHOLD) return false;
-
-  const aAnchored = playerA.isSneaking;
-  const bAnchored = playerB.isSneaking;
-  if (aAnchored && bAnchored) return false;
-
-  const radius = Math.max(0, MAX_DISTANCE - CLAMP_BUFFER);
-  const anchorInfo =
-    aAnchored !== bAnchored
-      ? aAnchored
-        ? { anchor: playerA, other: playerB, anchorPos: posA, otherPos: posB }
-        : { anchor: playerB, other: playerA, anchorPos: posB, otherPos: posA }
-      : undefined;
-
-  const corrections = anchorInfo
-    ? [
-        {
-          player: anchorInfo.other,
-          position: pointAtRadius(
-            anchorInfo.anchorPos,
-            anchorInfo.otherPos,
-            radius
-          ),
-        },
-      ]
-    : (() => {
-        const correctionDistance = (distance - radius) / 2;
-        return [
-          { player: playerA, position: moveToward(posA, posB, correctionDistance) },
-          { player: playerB, position: moveToward(posB, posA, correctionDistance) },
-        ];
-      })();
-
-  let corrected = false;
-  for (const { player, position } of corrections) {
-    const safePosition = findSafePlayerPosition(player.dimension, position);
-    if (
-      safePosition &&
-      hasClearPath(player.dimension, player.location, safePosition)
-    ) {
-      corrected =
-        teleportPreservingFacing(player, safePosition, player.dimension) ||
-        corrected;
-    }
-  }
-  return corrected;
 }
 
 /**
@@ -381,7 +272,6 @@ export function runRopeTick(tickCount) {
         posA,
         posB
       );
-      correctExceededDistance(playerA, playerB, posA, posB);
       if (!state.taut) {
         playTautSound(playerA);
         state.taut = true;

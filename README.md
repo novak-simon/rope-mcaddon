@@ -44,11 +44,11 @@ command in-game:
   no rope impulse, and the other player receives the full outward-velocity
   correction. If both players sneak, neither is moved by the velocity
   constraint.
-- The velocity constraint is applied first at the limit. A positional
-  correction is reserved for a materially large overshoot; this avoids
-  teleporting players for ordinary one-tick movement error. Large sudden
-  jumps (ender pearl, commands, etc.) and dimension changes still pull the
-  tied partner along instead of being treated as ordinary rope motion.
+- The velocity constraint is the only normal distance correction: players are
+  never teleported a small amount by rope physics. Large sudden jumps
+  (movement greater than `TELEPORT_JUMP_THRESHOLD`, such as an ender pearl or
+  command) and dimension changes still pull the tied partner along through
+  the existing teleport-follow behavior.
 - A big sudden jump in position (ender pearl, commands, etc.) or a
   dimension change (portal, respawn anchor) pulls the tied partner along
   instead of being treated as a clamp.
@@ -60,9 +60,6 @@ Edit that file and reload the world; no other file needs to change.
 
 Two values affect how the hard limit *feels*, worth knowing about if you
 tune them:
-- `CLAMP_BUFFER` — how far inside the max distance the rare positional
-  correction targets. It should remain small so it does not shorten the rope
-  during normal play.
 - `PARTICLE_ENDPOINT_OFFSET` and `PARTICLE_BODY_HEIGHT` — keep the visible
   particle rope away from player hitboxes and attach it around torso height.
 
@@ -78,9 +75,9 @@ looks broken out of the box. To swap in your own art:
 ## Giving yourself the rope item
 ## Known limitations (accepted for this project's scope)
 - Bedrock predicts player movement client-side, so rope impulses can still
-  receive occasional server correction. The rope uses per-tick full-vector
-  impulses instead of repeatedly teleporting the pulled player, which keeps
-  the correction smoother while retaining the buffer at the hard limit.
+  receive occasional server correction. The rope uses per-tick radial
+  impulses and never performs small positional teleports, which keeps the
+  correction smoother and lets the pair swing naturally.
 - Clamp and follow destinations are checked against the player's occupied
   space and shifted to a nearby clear position when possible. Extremely
   enclosed spaces can still prevent a safe correction.
