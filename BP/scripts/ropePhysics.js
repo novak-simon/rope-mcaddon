@@ -6,6 +6,7 @@ import {
   MOVE_BUDGET_PER_TICK,
   ROPE_STRETCH_STRENGTH,
   MAX_ROPE_STRETCH_IMPULSE,
+  TRAILING_PLAYER_PULL_SHARE,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
 import { distance3D } from "./vecMath.js";
@@ -196,16 +197,43 @@ function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB)
   if (outwardCorrection <= 0 && stretchCorrection <= 0) return;
 
   const correction = outwardCorrection + stretchCorrection;
-  const share = aAnchored || bAnchored ? correction : correction / 2;
+  let shareA = correction / 2;
+  let shareB = correction / 2;
+  if (aAnchored !== bAnchored) {
+    shareA = aAnchored ? 0 : correction;
+    shareB = bAnchored ? 0 : correction;
+  } else if (!aAnchored && !bAnchored) {
+    // Determine which endpoint is actively running away. The other endpoint
+    // is the trailing player and receives most of the rope impulse, allowing
+    // the runner to keep moving while still feeling the tether.
+    const velocityAlongA =
+      velocityA.x * direction.x +
+      velocityA.y * direction.y +
+      velocityA.z * direction.z;
+    const velocityAlongB =
+      velocityB.x * direction.x +
+      velocityB.y * direction.y +
+      velocityB.z * direction.z;
+    const aMovingAway = Math.max(0, -velocityAlongA);
+    const bMovingAway = Math.max(0, velocityAlongB);
+
+    if (aMovingAway > bMovingAway + 0.01) {
+      shareA = correction * (1 - TRAILING_PLAYER_PULL_SHARE);
+      shareB = correction * TRAILING_PLAYER_PULL_SHARE;
+    } else if (bMovingAway > aMovingAway + 0.01) {
+      shareA = correction * TRAILING_PLAYER_PULL_SHARE;
+      shareB = correction * (1 - TRAILING_PLAYER_PULL_SHARE);
+    }
+  }
   const impulseA = {
-    x: direction.x * share,
-    y: direction.y * share,
-    z: direction.z * share,
+    x: direction.x * shareA,
+    y: direction.y * shareA,
+    z: direction.z * shareA,
   };
   const impulseB = {
-    x: -direction.x * share,
-    y: -direction.y * share,
-    z: -direction.z * share,
+    x: -direction.x * shareB,
+    y: -direction.y * shareB,
+    z: -direction.z * shareB,
   };
 
   if (!aAnchored && isSafePlayerPosition(playerA.dimension, playerA.location)) {

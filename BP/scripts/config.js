@@ -10,6 +10,7 @@ export const TAUT_SOUND = "mob.horse.jump"; // short creak-ish placeholder; swap
 export const MOVE_BUDGET_PER_TICK = 6; // safety cap: max number of rope-triggered teleports a single player can cause in one tick (guards against circular chains)
 export const ROPE_STRETCH_STRENGTH = 0.2; // inward impulse per block of rope stretch
 export const MAX_ROPE_STRETCH_IMPULSE = 0.8; // prevents a large overshoot from causing a harsh snap
+export const TRAILING_PLAYER_PULL_SHARE = 0.75; // most taut-rope impulse pulls the passive/trailing player
 export const PARTICLE_ENDPOINT_OFFSET = 0.7; // keeps particles outside the player's hitbox
 export const PARTICLE_BODY_HEIGHT = 0.9; // attach the visible rope near the player's torso, not feet/head
 

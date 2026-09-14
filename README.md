@@ -44,6 +44,10 @@ command in-game:
   stretch-based inward impulse pulls both players back toward each other. This
   makes the trailing player follow instead of allowing the rope to remain
   stretched indefinitely.
+- When one player is clearly running away, the impulse is intentionally
+  asymmetric: the runner receives a smaller opposing impulse and the passive
+  player receives the larger pull. This approximates momentum transfer through
+  a real rope while keeping the runner mobile.
 - **Sneak (shift) to brace yourself as an anchor**: a sneaking player receives
   no rope impulse, and the other player receives the full outward-velocity
   correction. If both players sneak, neither is moved by the velocity
