@@ -40,6 +40,10 @@ command in-game:
   removes only their relative outward velocity along the rope. Equal-mass
   players share that correction, so the rope resists stretching without
   snapping either player back or disturbing sideways movement.
+- If a tick has already left the pair slightly beyond the limit, a capped
+  stretch-based inward impulse pulls both players back toward each other. This
+  makes the trailing player follow instead of allowing the rope to remain
+  stretched indefinitely.
 - **Sneak (shift) to brace yourself as an anchor**: a sneaking player receives
   no rope impulse, and the other player receives the full outward-velocity
   correction. If both players sneak, neither is moved by the velocity

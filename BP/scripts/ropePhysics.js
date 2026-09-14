@@ -4,6 +4,8 @@ import {
   TELEPORT_JUMP_THRESHOLD,
   PARTICLE_INTERVAL_TICKS,
   MOVE_BUDGET_PER_TICK,
+  ROPE_STRETCH_STRENGTH,
+  MAX_ROPE_STRETCH_IMPULSE,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
 import { distance3D } from "./vecMath.js";
@@ -177,13 +179,23 @@ function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB)
     relativeVelocity.x * direction.x +
     relativeVelocity.y * direction.y +
     relativeVelocity.z * direction.z;
-  if (radialVelocity <= 0) return;
 
   const aAnchored = playerA.isSneaking;
   const bAnchored = playerB.isSneaking;
   if (aAnchored && bAnchored) return;
 
-  const correction = radialVelocity;
+  // Removing outward relative velocity prevents further stretching. The
+  // stretch bias supplies the actual tether pull when the pair is already
+  // beyond its limit, including when the trailing player has little velocity.
+  const outwardCorrection = Math.max(0, radialVelocity);
+  const stretch = Math.max(0, distance - MAX_DISTANCE);
+  const stretchCorrection = Math.min(
+    MAX_ROPE_STRETCH_IMPULSE,
+    stretch * ROPE_STRETCH_STRENGTH
+  );
+  if (outwardCorrection <= 0 && stretchCorrection <= 0) return;
+
+  const correction = outwardCorrection + stretchCorrection;
   const share = aAnchored || bAnchored ? correction : correction / 2;
   const impulseA = {
     x: direction.x * share,
