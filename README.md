@@ -1,7 +1,7 @@
 # Rope Addon — install & usage
 
 ## Install
-1. Import `rope_addon.mcaddon` (double-tap it, or use "Import" from within
+1. Import `rope_1.0.mcaddon` (double-tap it, or use "Import" from within
    Minecraft). It contains two packs — a Behavior Pack (the logic) and a
    Resource Pack (the item texture) — both need to end up applied to your
    world. If double-tap import doesn't work, copy the `BP` folder into your
@@ -18,16 +18,6 @@ If you already installed an earlier version: remove the old "Rope Addon"
 pack(s) from the world first, then import this one, to avoid ending up with
 two versions active at once.
 
-## Adding your own texture
-The item currently uses a placeholder icon (a simple brown line) so nothing
-looks broken out of the box. To swap in your own art:
-1. Make a 16×16 (or 32×32/64×64 — any power-of-two square works) PNG.
-2. Replace `RP/textures/items/rope_tether_item.png` with your file, keeping
-   the exact same filename.
-3. Re-import/re-copy just that one file — nothing else needs to change,
-   since the item JSON and texture mapping already point at it.
-
-## Giving yourself the rope item
 There's no crafting recipe (by design, per project scope). Give it with a
 command in-game:
 
@@ -76,6 +66,16 @@ tune them:
 - `PARTICLE_ENDPOINT_OFFSET` and `PARTICLE_BODY_HEIGHT` — keep the visible
   particle rope away from player hitboxes and attach it around torso height.
 
+## Adding your own texture
+The item currently uses a placeholder icon (a simple brown line) so nothing
+looks broken out of the box. To swap in your own art:
+1. Make a 16×16 (or 32×32/64×64 — any power-of-two square works) PNG.
+2. Replace `RP/textures/items/rope_tether_item.png` with your file, keeping
+   the exact same filename.
+3. Re-import/re-copy just that one file — nothing else needs to change,
+   since the item JSON and texture mapping already point at it.
+
+## Giving yourself the rope item
 ## Known limitations (accepted for this project's scope)
 - Bedrock predicts player movement client-side, so rope impulses can still
   receive occasional server correction. The rope uses per-tick full-vector
