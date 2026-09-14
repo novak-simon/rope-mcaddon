@@ -48,6 +48,9 @@ command in-game:
   asymmetric: the runner receives a smaller opposing impulse and the passive
   player receives the larger pull. This approximates momentum transfer through
   a real rope while keeping the runner mobile.
+- Rope response is deliberately damped and capped. Only a fraction of
+  outward speed is corrected per tick, and diagonal ropes have a separate
+  vertical impulse cap so tension cannot catapult players into the air.
 - **Sneak (shift) to brace yourself**: a sneaking player remains part of the
   rope constraint but responds at 25% mobility. The remaining correction is
   transferred to the other player, so sneaking makes the player harder to
@@ -71,6 +74,8 @@ Two values affect how the hard limit *feels*, worth knowing about if you
 tune them:
 - `PARTICLE_ENDPOINT_OFFSET` and `PARTICLE_BODY_HEIGHT` — keep the visible
   particle rope away from player hitboxes and attach it around torso height.
+- `ROPE_RADIAL_RESPONSE`, `MAX_ROPE_IMPULSE`, and
+  `MAX_ROPE_VERTICAL_IMPULSE` — control taut-rope damping and safety caps.
 
 ## Adding your own texture
 The item currently uses a placeholder icon (a simple brown line) so nothing

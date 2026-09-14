@@ -10,6 +10,9 @@ import {
   TICK_INTERVAL,
   SNEAK_ROPE_MOBILITY,
   ROPE_BOUNDARY_LEAD_TICKS,
+  ROPE_RADIAL_RESPONSE,
+  MAX_ROPE_IMPULSE,
+  MAX_ROPE_VERTICAL_IMPULSE,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
 import { distance3D } from "./vecMath.js";
@@ -205,9 +208,16 @@ function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB)
   );
   const boundaryCorrection =
     distance >= MAX_DISTANCE || predictedExcess > 0
-      ? Math.max(0, radialVelocity) + predictedExcess / tickSeconds
+      ? Math.min(
+          MAX_ROPE_IMPULSE,
+          Math.max(0, radialVelocity) * ROPE_RADIAL_RESPONSE +
+            predictedExcess * ROPE_STRETCH_STRENGTH
+        )
       : 0;
-  const correction = boundaryCorrection + stretchCorrection;
+  const correction = Math.min(
+    MAX_ROPE_IMPULSE,
+    boundaryCorrection + stretchCorrection
+  );
   if (correction <= 0) return;
 
   const velocityAlongA =
@@ -252,6 +262,14 @@ function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB)
 
   if (aAnchored && impulseA.y < 0) impulseA.y = 0;
   if (bAnchored && impulseB.y < 0) impulseB.y = 0;
+  impulseA.y = Math.max(
+    -MAX_ROPE_VERTICAL_IMPULSE,
+    Math.min(MAX_ROPE_VERTICAL_IMPULSE, impulseA.y)
+  );
+  impulseB.y = Math.max(
+    -MAX_ROPE_VERTICAL_IMPULSE,
+    Math.min(MAX_ROPE_VERTICAL_IMPULSE, impulseB.y)
+  );
   if (responseA > 0 && isSafePlayerPosition(playerA.dimension, playerA.location)) {
     queueImpulse(pendingImpulses, playerA, impulseA);
   }
