@@ -1,23 +1,19 @@
 import { world } from "@minecraft/server";
 import {
-  SLACK_DISTANCE,
   MAX_DISTANCE,
   TELEPORT_JUMP_THRESHOLD,
   PARTICLE_INTERVAL_TICKS,
   MOVE_BUDGET_PER_TICK,
   CLAMP_BUFFER,
-  PULL_STRENGTH,
-  CLAMP_IMPULSE_STRENGTH,
-  MAX_CLAMP_CORRECTION,
-  SWING_VERTICAL_STRENGTH,
-  INWARD_VELOCITY_DAMPING,
+  POSITION_CORRECTION_THRESHOLD,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
 import { distance3D } from "./vecMath.js";
 import { drawRopeParticles, playTautSound } from "./feedback.js";
 
 // Per-pair runtime state, keyed by "nameA::nameB" (sorted for stability).
-// Not persisted - rebuilt naturally as players move.
+// This is deliberately not persisted; it is only used to recognize external
+// movement between two physics ticks.
 const pairState = new Map();
 
 function pairKey(nameA, nameB) {
@@ -25,31 +21,30 @@ function pairKey(nameA, nameB) {
 }
 
 function getPlayerByName(name) {
-  for (const p of world.getPlayers()) {
-    if (p.name === name) return p;
+  for (const player of world.getPlayers()) {
+    if (player.name === name) return player;
   }
   return undefined;
 }
 
 /**
- * Teleports a player to a new position while explicitly preserving their
- * current look direction. teleport() resets facing unless rotation is passed
- * back in, which produced an unnatural "snap" whenever the rope corrected
- * someone's position while they were turning the camera.
+ * teleport() resets facing unless rotation is passed back in. This helper is
+ * used only for dimension changes, external teleports, and hard safety
+ * corrections, not for normal rope motion.
  */
 function teleportPreservingFacing(player, destination, dimension) {
   try {
     const rotation = player.getRotation();
     player.teleport(destination, { dimension, rotation });
+    return true;
   } catch {
-    // Destination unsafe or similar - skip this tick's correction rather than
-    // forcing it (acceptable per project scope, not fully idiot-proofed).
+    // A destination can be temporarily invalid or unloaded. The next tick
+    // will retry the safety handling without forcing the player through a block.
+    return false;
   }
 }
 
 function isSafePlayerPosition(dimension, position) {
-  // Check the space occupied by the player's feet, body, and head. Using
-  // several points also catches corners where a radial clamp enters a wall.
   const samples = [
     { x: position.x - 0.3, z: position.z - 0.3 },
     { x: position.x - 0.3, z: position.z + 0.3 },
@@ -66,7 +61,12 @@ function isSafePlayerPosition(dimension, position) {
           y: position.y + height,
           z: sample.z,
         });
-        if (!block || (!block.isAir && block.typeId !== "minecraft:water" && block.typeId !== "minecraft:lava")) {
+        if (
+          !block ||
+          (!block.isAir &&
+            block.typeId !== "minecraft:water" &&
+            block.typeId !== "minecraft:lava")
+        ) {
           return false;
         }
       }
@@ -128,11 +128,10 @@ function pointAtRadius(anchor, point, radius) {
   const dx = point.x - anchor.x;
   const dy = point.y - anchor.y;
   const dz = point.z - anchor.z;
-  const fullDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  if (fullDistance < 0.001) {
-    return { x: point.x, y: point.y, z: point.z };
-  }
-  const scale = radius / fullDistance;
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (distance < 0.001) return { x: point.x, y: point.y, z: point.z };
+
+  const scale = radius / distance;
   return {
     x: anchor.x + dx * scale,
     y: anchor.y + dy * scale,
@@ -140,197 +139,206 @@ function pointAtRadius(anchor, point, radius) {
   };
 }
 
-function queueVelocity(pendingImpulses, player, velocity) {
+function moveToward(from, toward, distance) {
+  const dx = toward.x - from.x;
+  const dy = toward.y - from.y;
+  const dz = toward.z - from.z;
+  const length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (length < 0.001) return { x: from.x, y: from.y, z: from.z };
+  return {
+    x: from.x + (dx / length) * distance,
+    y: from.y + (dy / length) * distance,
+    z: from.z + (dz / length) * distance,
+  };
+}
+
+function queueImpulse(pendingImpulses, player, impulse) {
   const existing = pendingImpulses.get(player.id);
   if (existing) {
-    existing.x += velocity.x;
-    existing.y += velocity.y;
-    existing.z += velocity.z;
-    existing.count += 1;
+    existing.x += impulse.x;
+    existing.y += impulse.y;
+    existing.z += impulse.z;
     return;
   }
-  pendingImpulses.set(player.id, {
-    player,
-    x: velocity.x,
-    y: velocity.y,
-    z: velocity.z,
-    count: 1,
-  });
+  pendingImpulses.set(player.id, { player, ...impulse });
 }
 
 function applyPendingImpulses(pendingImpulses) {
-  for (const { player, x, y, z, count } of pendingImpulses.values()) {
+  for (const { player, x, y, z } of pendingImpulses.values()) {
     try {
-      const currentVelocity = player.getVelocity();
-      const desiredX = x / count;
-      const desiredY = y / count;
-      const desiredZ = z / count;
-      const desiredSpeed = Math.sqrt(
-        desiredX * desiredX + desiredY * desiredY + desiredZ * desiredZ
-      );
-      if (desiredSpeed < 0.001) continue;
-      const directionX = desiredX / desiredSpeed;
-      const directionY = desiredY / desiredSpeed;
-      const directionZ = desiredZ / desiredSpeed;
-      const currentAlongRope =
-        currentVelocity.x * directionX +
-        currentVelocity.y * directionY +
-        currentVelocity.z * directionZ;
-      const correction = Math.max(
-        -MAX_CLAMP_CORRECTION,
-        Math.min(
-          MAX_CLAMP_CORRECTION,
-          desiredSpeed -
-            (currentAlongRope < 0
-              ? currentAlongRope
-              : currentAlongRope * INWARD_VELOCITY_DAMPING)
-        )
-      );
-      player.applyImpulse({
-        x: directionX * correction,
-        y: directionY * correction,
-        z: directionZ * correction,
-      });
+      player.applyImpulse({ x, y, z });
     } catch {
-      // Non-critical if a player becomes invalid during this tick.
+      // A player can become invalid between collection and application.
     }
   }
 }
 
 /**
- * Teleports `follower` to just next to `target`'s position/dimension.
- * The destination is checked so a cross-dimension follow cannot place the
- * follower inside a wall or another solid block.
+ * Moves a partner to the other dimension when the dimension-change event did
+ * not catch the transition. This is not part of the normal rope constraint.
  */
 function teleportFollowerTo(follower, target) {
   const targetPos = target.location;
-  // Offset slightly so the follower doesn't land exactly inside the target.
   const requested = {
     x: targetPos.x + (Math.random() < 0.5 ? 1 : -1),
     y: targetPos.y,
     z: targetPos.z + (Math.random() < 0.5 ? 1 : -1),
   };
   const destination = findSafePlayerPosition(target.dimension, requested);
-  if (!destination) return;
-  teleportPreservingFacing(follower, destination, target.dimension);
-}
-
-/**
- * Requests a velocity toward the other end of the rope. Vertical correction
- * only appears when the full 3D tether is taut, allowing natural swinging.
- */
-function applyRopeVelocity(
-  pendingImpulses,
-  player,
-  fromPos,
-  towardPos,
-  desiredSpeed,
-  verticalStrength = 1
-) {
-  if (!isSafePlayerPosition(player.dimension, fromPos)) {
-    const recoveryPosition = findSafePlayerPosition(player.dimension, fromPos);
-    if (recoveryPosition) {
-      pendingImpulses.delete(player.id);
-      teleportPreservingFacing(player, recoveryPosition, player.dimension);
-    }
-    return;
-  }
-  const dx = towardPos.x - fromPos.x;
-  const dy = towardPos.y - fromPos.y;
-  const dz = towardPos.z - fromPos.z;
-  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  if (distance < 0.001) return;
-  const stepDistance = Math.min(desiredSpeed, distance);
-  const stepTarget = {
-    x: fromPos.x + (dx / distance) * stepDistance,
-    y: fromPos.y + (dy / distance) * stepDistance,
-    z: fromPos.z + (dz / distance) * stepDistance,
-  };
-  if (!hasClearPath(player.dimension, fromPos, stepTarget)) return;
-
-  queueVelocity(pendingImpulses, player, {
-    x: (dx / distance) * desiredSpeed,
-    y: (dy / distance) * desiredSpeed * verticalStrength,
-    z: (dz / distance) * desiredSpeed,
-  });
-}
-
-function applyClampCorrection(pendingImpulses, player, anchorPos, heldPos) {
-  const distanceFromAnchor = distance3D(anchorPos, heldPos);
-  const requested = pointAtRadius(
-    anchorPos,
-    heldPos,
-    MAX_DISTANCE - CLAMP_BUFFER
-  );
-  const safeTarget = findSafePlayerPosition(player.dimension, requested);
-  const target = safeTarget || requested;
-  const dx = target.x - heldPos.x;
-  const dz = target.z - heldPos.z;
-  const dy = target.y - heldPos.y;
-  const correctionDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-  if (correctionDistance > 0.001 && hasClearPath(player.dimension, heldPos, target)) {
-    const correctionSpeed = Math.min(
-      MAX_CLAMP_CORRECTION,
-      Math.max(0, distanceFromAnchor - (MAX_DISTANCE - CLAMP_BUFFER)) *
-        CLAMP_IMPULSE_STRENGTH
-    );
-    applyRopeVelocity(pendingImpulses, player, heldPos, target, correctionSpeed);
-  }
-
-  // Recover a player already embedded in a block without applying another
-  // impulse. If no safe position exists, such as a sealed one-block hole,
-  // leave them in place rather than forcing them through the enclosure.
-  if (!isSafePlayerPosition(player.dimension, heldPos) && safeTarget) {
-    pendingImpulses.delete(player.id);
-    teleportPreservingFacing(player, safeTarget, player.dimension);
+  if (destination) {
+    teleportPreservingFacing(follower, destination, target.dimension);
   }
 }
 
 /**
- * Decides who is "anchored" (bracing, via sneak) for this pair. An anchored
- * player never gets moved by the rope - the other player is held/dragged
- * toward them instead. This is what lets one player brace on a bridge and
- * hold the other at rope's length rather than getting dragged off too.
+ * Apply the small positional fallback needed when a tick has already left the
+ * pair beyond the hard limit. Normal movement is constrained by impulses; a
+ * teleport is only used here to remove an existing violation and is kept
+ * slightly inside the limit to avoid floating-point re-triggering.
  *
- * Returns { anchor, other, anchorPos, otherPos } if exactly one player is
- * anchored, or null if the situation is symmetric (both or neither anchored)
- * and needs to be handled by the caller instead.
+ * Returns true when a correction was requested, so the caller does not also
+ * apply a velocity constraint to positions that are being relocated.
  */
-function resolveAnchor(playerA, playerB, posA, posB) {
+function correctExceededDistance(playerA, playerB, posA, posB) {
+  const distance = distance3D(posA, posB);
+  const excess = distance - MAX_DISTANCE;
+  if (excess <= POSITION_CORRECTION_THRESHOLD) return false;
+
   const aAnchored = playerA.isSneaking;
   const bAnchored = playerB.isSneaking;
-  if (aAnchored === bAnchored) return null;
-  return aAnchored
-    ? { anchor: playerA, other: playerB, anchorPos: posA, otherPos: posB }
-    : { anchor: playerB, other: playerA, anchorPos: posB, otherPos: posA };
+  if (aAnchored && bAnchored) return false;
+
+  const radius = Math.max(0, MAX_DISTANCE - CLAMP_BUFFER);
+  const anchorInfo =
+    aAnchored !== bAnchored
+      ? aAnchored
+        ? { anchor: playerA, other: playerB, anchorPos: posA, otherPos: posB }
+        : { anchor: playerB, other: playerA, anchorPos: posB, otherPos: posA }
+      : undefined;
+
+  const corrections = anchorInfo
+    ? [
+        {
+          player: anchorInfo.other,
+          position: pointAtRadius(
+            anchorInfo.anchorPos,
+            anchorInfo.otherPos,
+            radius
+          ),
+        },
+      ]
+    : (() => {
+        const correctionDistance = (distance - radius) / 2;
+        return [
+          { player: playerA, position: moveToward(posA, posB, correctionDistance) },
+          { player: playerB, position: moveToward(posB, posA, correctionDistance) },
+        ];
+      })();
+
+  let corrected = false;
+  for (const { player, position } of corrections) {
+    const safePosition = findSafePlayerPosition(player.dimension, position);
+    if (
+      safePosition &&
+      hasClearPath(player.dimension, player.location, safePosition)
+    ) {
+      corrected =
+        teleportPreservingFacing(player, safePosition, player.dimension) ||
+        corrected;
+    }
+  }
+  return corrected;
 }
 
-/** Called once per physics tick (see TICK_INTERVAL in main.js) for every active rope pair. */
+/**
+ * Constrains only outward radial velocity. Tangential velocity and inward
+ * velocity are left untouched, so walking around the rope and moving toward a
+ * partner remain free. applyImpulse is the Bedrock API's velocity mutation;
+ * for equal-mass players it provides the symmetric half impulse below.
+ */
+function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB) {
+  const dx = posB.x - posA.x;
+  const dy = posB.y - posA.y;
+  const dz = posB.z - posA.z;
+  const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (distance < 0.001) return;
+
+  let velocityA;
+  let velocityB;
+  try {
+    velocityA = playerA.getVelocity();
+    velocityB = playerB.getVelocity();
+  } catch {
+    return;
+  }
+
+  const direction = {
+    x: dx / distance,
+    y: dy / distance,
+    z: dz / distance,
+  };
+  const relativeVelocity = {
+    x: velocityB.x - velocityA.x,
+    y: velocityB.y - velocityA.y,
+    z: velocityB.z - velocityA.z,
+  };
+  const radialVelocity =
+    relativeVelocity.x * direction.x +
+    relativeVelocity.y * direction.y +
+    relativeVelocity.z * direction.z;
+  if (radialVelocity <= 0) return;
+
+  const aAnchored = playerA.isSneaking;
+  const bAnchored = playerB.isSneaking;
+  if (aAnchored && bAnchored) return;
+
+  const correction = radialVelocity;
+  const share = aAnchored || bAnchored ? correction : correction / 2;
+  const impulseA = {
+    x: direction.x * share,
+    y: direction.y * share,
+    z: direction.z * share,
+  };
+  const impulseB = {
+    x: -direction.x * share,
+    y: -direction.y * share,
+    z: -direction.z * share,
+  };
+
+  if (!aAnchored && isSafePlayerPosition(playerA.dimension, playerA.location)) {
+    queueImpulse(pendingImpulses, playerA, impulseA);
+  }
+  if (!bAnchored && isSafePlayerPosition(playerB.dimension, playerB.location)) {
+    queueImpulse(pendingImpulses, playerB, impulseB);
+  }
+}
+
+/** Called once per physics tick for every active rope pair. */
 export function runRopeTick(tickCount) {
-  const pairs = getAllPairs();
-  const moveBudget = new Map(); // name -> teleports caused this tick, safety cap for chains
+  const moveBudget = new Map();
   const pendingImpulses = new Map();
 
-  for (const [nameA, nameB] of pairs) {
+  for (const [nameA, nameB] of getAllPairs()) {
     const playerA = getPlayerByName(nameA);
     const playerB = getPlayerByName(nameB);
-    if (!playerA || !playerB) continue; // one of them is offline
+    if (!playerA || !playerB) continue;
 
     const key = pairKey(nameA, nameB);
     let state = pairState.get(key);
     if (!state) {
-      state = { lastPosA: playerA.location, lastPosB: playerB.location, taut: false };
+      state = {
+        lastPosA: playerA.location,
+        lastPosB: playerB.location,
+        taut: false,
+      };
       pairState.set(key, state);
     }
 
-    // Dimension mismatch is normally caught by the playerDimensionChange event,
-    // but if it happens for any other reason, treat it as a safety net here too.
     if (playerA.dimension.id !== playerB.dimension.id) {
-      const budgetUsed = moveBudget.get(nameB) ?? 0;
-      if (budgetUsed < MOVE_BUDGET_PER_TICK) {
+      const used = moveBudget.get(nameB) ?? 0;
+      if (used < MOVE_BUDGET_PER_TICK) {
         teleportFollowerTo(playerB, playerA);
-        moveBudget.set(nameB, budgetUsed + 1);
+        moveBudget.set(nameB, used + 1);
       }
       state.lastPosA = playerA.location;
       state.lastPosB = playerB.location;
@@ -339,13 +347,8 @@ export function runRopeTick(tickCount) {
 
     const posA = playerA.location;
     const posB = playerB.location;
-
     const deltaA = distance3D(posA, state.lastPosA);
     const deltaB = distance3D(posB, state.lastPosB);
-    const dist = distance3D(posA, posB);
-
-    // Large single-tick jump for either player = treat as a teleport (ender pearl, /tp, etc),
-    // not a clamp. The player who DIDN'T jump gets pulled to the one who did.
     const aJumped = deltaA > TELEPORT_JUMP_THRESHOLD;
     const bJumped = deltaB > TELEPORT_JUMP_THRESHOLD;
 
@@ -363,8 +366,6 @@ export function runRopeTick(tickCount) {
           moveBudget.set(nameA, used + 1);
         }
       }
-      // If both jumped in the same tick, leave them - most likely both got moved by
-      // something external in the same tick (e.g. both entered a portal together).
       state.lastPosA = playerA.location;
       state.lastPosB = playerB.location;
       state.taut = false;
@@ -372,66 +373,15 @@ export function runRopeTick(tickCount) {
     }
 
     const ropeDistance = distance3D(posA, posB);
-
-    if (ropeDistance > MAX_DISTANCE) {
-      const anchorInfo = resolveAnchor(playerA, playerB, posA, posB);
-
-      let held; // the player who gets clamped this tick
-      let anchorPos;
-      let heldPos;
-
-      if (anchorInfo) {
-        // Exactly one player is bracing (sneaking) - they never move; the
-        // other one is held at rope's length from them. This is the
-        // "hold someone from a bridge" case.
-        held = anchorInfo.other;
-        anchorPos = anchorInfo.anchorPos;
-        heldPos = anchorInfo.otherPos;
-      } else {
-        // Neither is bracing: default is DRAG, not stop. Whoever is actively
-        // moving away succeeds in pulling the other along - the passive
-        // partner (who moved less this tick) is the one held/dragged toward
-        // the active mover, not the other way around.
-        const aIsActive = deltaA >= deltaB;
-        held = aIsActive ? playerB : playerA;
-        anchorPos = aIsActive ? posA : posB;
-        heldPos = aIsActive ? posB : posA;
-      }
-
-      // Hold slightly INSIDE the spherical max radius. The buffer creates a
-      // small dead zone so float jitter does not repeatedly re-trigger tension.
-      applyClampCorrection(pendingImpulses, held, anchorPos, heldPos);
-
-      if (!state.taut) {
-        playTautSound(held);
-        state.taut = true;
-      }
-    } else if (ropeDistance > SLACK_DISTANCE) {
-      // Taut zone: gravity can pull a player down naturally, then the rope
-      // supplies an inward/upward velocity as the full tether tightens.
-      const depth = (ropeDistance - SLACK_DISTANCE) / (MAX_DISTANCE - SLACK_DISTANCE);
-      const pull = PULL_STRENGTH * depth;
-
-      const anchorInfo = resolveAnchor(playerA, playerB, posA, posB);
-      if (anchorInfo) {
-        // Only the non-anchored player feels the pull - the bracing player
-        // holds firm and isn't nudged at all.
-        applyRopeVelocity(
-          pendingImpulses,
-          anchorInfo.other,
-          anchorInfo.otherPos,
-          anchorInfo.anchorPos,
-          pull,
-          SWING_VERTICAL_STRENGTH
-        );
-      } else if (playerA.isSneaking && playerB.isSneaking) {
-        // Both bracing - tension held, nobody nudged.
-      } else {
-        // Default: symmetric tug, both players feel a gentle pull toward each other.
-        applyRopeVelocity(pendingImpulses, playerA, posA, posB, pull, SWING_VERTICAL_STRENGTH);
-        applyRopeVelocity(pendingImpulses, playerB, posB, posA, pull, SWING_VERTICAL_STRENGTH);
-      }
-
+    if (ropeDistance >= MAX_DISTANCE) {
+      constrainOutwardVelocity(
+        pendingImpulses,
+        playerA,
+        playerB,
+        posA,
+        posB
+      );
+      correctExceededDistance(playerA, playerB, posA, posB);
       if (!state.taut) {
         playTautSound(playerA);
         state.taut = true;
@@ -440,7 +390,6 @@ export function runRopeTick(tickCount) {
       state.taut = false;
     }
 
-    // Particle trail, drawn only every PARTICLE_INTERVAL_TICKS to keep it subtle.
     if (tickCount % PARTICLE_INTERVAL_TICKS === 0) {
       drawRopeParticles(playerA.dimension, playerA.location, playerB.location);
     }
@@ -452,7 +401,7 @@ export function runRopeTick(tickCount) {
   applyPendingImpulses(pendingImpulses);
 }
 
-/** Call when a rope pair is removed elsewhere, to drop its stale runtime state. */
+/** Call when a rope pair is removed elsewhere, to drop stale runtime state. */
 export function clearPairState(nameA, nameB) {
   pairState.delete(pairKey(nameA, nameB));
 }

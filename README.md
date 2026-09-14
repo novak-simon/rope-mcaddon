@@ -43,43 +43,36 @@ command in-game:
   aim roughly at them and use the item.
 - You can tie as many pairs as you like — any player can be tied to any
   number of others; each rope pair behaves independently.
-- **Slack zone** (0–8 blocks by default): fully free, no effect at all.
-- **Taut zone** (8–10 blocks): the rope actively resists — a gentle pull
-  toward each other, stronger the closer you get to the hard limit.
-- **Hard limit** (10 blocks): by default, **the rope drags, it doesn't
-  stop** — whoever is actively walking away succeeds in pulling their
-  partner along with them, since neither of you is bracing against it.
-  **Sneak (shift) to brace yourself as an anchor**: a sneaking player never
-  gets moved by the rope, and instead holds their partner at rope's length.
-  This is how you hold someone from a bridge — stand near the edge, sneak,
-  and if your partner walks/falls off, they're held at the limit instead of
-  dragging you off too. If neither player sneaks, a player who gets stuck
-  (e.g. boxed into a hole) can be dragged out of it by their partner walking
-  away — sneak to avoid that if you want to stay put.
+- **Below the hard limit** (10 blocks by default): fully free. The rope does
+  not pull players together, so inward, sideways, and ordinary falling
+  movement are preserved.
+- **At the hard limit**: the constraint reads both players' 3D velocities and
+  removes only their relative outward velocity along the rope. Equal-mass
+  players share that correction, so the rope resists stretching without
+  snapping either player back or disturbing sideways movement.
+- **Sneak (shift) to brace yourself as an anchor**: a sneaking player receives
+  no rope impulse, and the other player receives the full outward-velocity
+  correction. If both players sneak, neither is moved by the velocity
+  constraint.
+- The velocity constraint is applied first at the limit. A positional
+  correction is reserved for a materially large overshoot; this avoids
+  teleporting players for ordinary one-tick movement error. Large sudden
+  jumps (ender pearl, commands, etc.) and dimension changes still pull the
+  tied partner along instead of being treated as ordinary rope motion.
 - A big sudden jump in position (ender pearl, commands, etc.) or a
   dimension change (portal, respawn anchor) pulls the tied partner along
   instead of being treated as a clamp.
 
 ## Tuning
 All the numbers that matter live in one file: `BP/scripts/config.js` —
-slack distance, max distance, pull strength, particle look, sound, etc.
+maximum distance, positional safety margin, particle look, sound, etc.
 Edit that file and reload the world; no other file needs to change.
 
 Two values affect how the hard limit *feels*, worth knowing about if you
 tune them:
-- `CLAMP_BUFFER` — how far inside the max distance the hold-back point sits.
-  Too small and it can feel jittery/grabby again; too large and the rope
-  feels shorter than its stated max distance.
-- `PULL_STRENGTH` — how hard the taut-zone pull is. Too strong and it'll
-  feel like being yanked; too weak and you won't notice it before hitting
-  the hard limit.
-- `CLAMP_IMPULSE_STRENGTH` and `MAX_CLAMP_CORRECTION` — control how quickly
-  a player is smoothly pulled back at the hard limit. The correction uses
-  full 3D motion, so a player falling below a bridge is pulled upward too.
-- `SWING_VERTICAL_STRENGTH` and `INWARD_VELOCITY_DAMPING` — control the
-  airborne swing. Higher vertical strength gives a larger up/down arc;
-  lower damping preserves more inward momentum and makes the swing carry
-  farther.
+- `CLAMP_BUFFER` — how far inside the max distance the rare positional
+  correction targets. It should remain small so it does not shorten the rope
+  during normal play.
 - `PARTICLE_ENDPOINT_OFFSET` and `PARTICLE_BODY_HEIGHT` — keep the visible
   particle rope away from player hitboxes and attach it around torso height.
 
@@ -96,10 +89,9 @@ tune them:
   position exists; the rope never uses force to push their feet, body, or head
   through solid blocks. A sealed one-block hole therefore requires a
   separate teleport or manual escape.
-- Normal rope movement is velocity-based in 3D. It allows gravity to pull a
-  player down while the rope is slack, then adds inward/upward velocity once
-  the full tether becomes taut. This produces a swinging tether effect while
-  continuously enforcing the maximum 3D distance.
+- Normal rope movement is velocity-based in 3D. Only outward radial relative
+  velocity is removed at the limit; perpendicular movement and inward
+  movement are not damped.
 - Same-dimension teleport detection is a "big position jump" heuristic —
   can misfire on legitimate very fast movement, but works for the common
   cases (ender pearls, commands).
