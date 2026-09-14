@@ -7,6 +7,9 @@ import {
   ROPE_STRETCH_STRENGTH,
   MAX_ROPE_STRETCH_IMPULSE,
   TRAILING_PLAYER_PULL_SHARE,
+  TICK_INTERVAL,
+  SNEAK_ROPE_MOBILITY,
+  ROPE_BOUNDARY_LEAD_TICKS,
 } from "./config.js";
 import { getAllPairs } from "./ropeManager.js";
 import { distance3D } from "./vecMath.js";
@@ -183,63 +186,76 @@ function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB)
 
   const aAnchored = playerA.isSneaking;
   const bAnchored = playerB.isSneaking;
-  if (aAnchored && bAnchored) return;
+  const mobilityA = aAnchored ? SNEAK_ROPE_MOBILITY : 1;
+  const mobilityB = bAnchored ? SNEAK_ROPE_MOBILITY : 1;
+  const tickSeconds = TICK_INTERVAL / 20;
 
-  // Removing outward relative velocity prevents further stretching. The
-  // stretch bias supplies the actual tether pull when the pair is already
-  // beyond its limit, including when the trailing player has little velocity.
-  const outwardCorrection = Math.max(0, radialVelocity);
-  const stretch = Math.max(0, distance - MAX_DISTANCE);
+  // Predict the next boundary crossing. This lets the constraint transfer
+  // motion before a stationary partner is visibly left behind.
+  const predictedExcess = Math.max(
+    0,
+    distance + Math.max(0, radialVelocity) * tickSeconds *
+      ROPE_BOUNDARY_LEAD_TICKS -
+      MAX_DISTANCE
+  );
+  const currentStretch = Math.max(0, distance - MAX_DISTANCE);
   const stretchCorrection = Math.min(
     MAX_ROPE_STRETCH_IMPULSE,
-    stretch * ROPE_STRETCH_STRENGTH
+    (currentStretch + predictedExcess) * ROPE_STRETCH_STRENGTH
   );
-  if (outwardCorrection <= 0 && stretchCorrection <= 0) return;
+  const boundaryCorrection =
+    distance >= MAX_DISTANCE || predictedExcess > 0
+      ? Math.max(0, radialVelocity) + predictedExcess / tickSeconds
+      : 0;
+  const correction = boundaryCorrection + stretchCorrection;
+  if (correction <= 0) return;
 
-  const correction = outwardCorrection + stretchCorrection;
-  let shareA = correction / 2;
-  let shareB = correction / 2;
-  if (aAnchored !== bAnchored) {
-    shareA = aAnchored ? 0 : correction;
-    shareB = bAnchored ? 0 : correction;
-  } else if (!aAnchored && !bAnchored) {
-    // Determine which endpoint is actively running away. The other endpoint
-    // is the trailing player and receives most of the rope impulse, allowing
-    // the runner to keep moving while still feeling the tether.
-    const velocityAlongA =
-      velocityA.x * direction.x +
-      velocityA.y * direction.y +
-      velocityA.z * direction.z;
-    const velocityAlongB =
-      velocityB.x * direction.x +
-      velocityB.y * direction.y +
-      velocityB.z * direction.z;
-    const aMovingAway = Math.max(0, -velocityAlongA);
-    const bMovingAway = Math.max(0, velocityAlongB);
+  const velocityAlongA =
+    velocityA.x * direction.x +
+    velocityA.y * direction.y +
+    velocityA.z * direction.z;
+  const velocityAlongB =
+    velocityB.x * direction.x +
+    velocityB.y * direction.y +
+    velocityB.z * direction.z;
+  const aMovingAway = Math.max(0, -velocityAlongA);
+  const bMovingAway = Math.max(0, velocityAlongB);
 
-    if (aMovingAway > bMovingAway + 0.01) {
-      shareA = correction * (1 - TRAILING_PLAYER_PULL_SHARE);
-      shareB = correction * TRAILING_PLAYER_PULL_SHARE;
-    } else if (bMovingAway > aMovingAway + 0.01) {
-      shareA = correction * TRAILING_PLAYER_PULL_SHARE;
-      shareB = correction * (1 - TRAILING_PLAYER_PULL_SHARE);
-    }
+  let shareA = 0.5;
+  let shareB = 0.5;
+  if (aMovingAway > bMovingAway + 0.01) {
+    shareB = TRAILING_PLAYER_PULL_SHARE;
+    shareA = 1 - shareB;
+  } else if (bMovingAway > aMovingAway + 0.01) {
+    shareA = TRAILING_PLAYER_PULL_SHARE;
+    shareB = 1 - shareA;
   }
+
+  // Sneaking increases effective mass: reduce that player's response and
+  // transfer the unused response to the other endpoint.
+  const responseA = shareA * mobilityA;
+  const responseB = shareB * mobilityB;
+  const responseTotal = responseA + responseB;
+  if (responseTotal <= 0) return;
+  const effectiveShareA = responseA / responseTotal;
+  const effectiveShareB = responseB / responseTotal;
   const impulseA = {
-    x: direction.x * shareA,
-    y: direction.y * shareA,
-    z: direction.z * shareA,
+    x: direction.x * correction * effectiveShareA,
+    y: direction.y * correction * effectiveShareA,
+    z: direction.z * correction * effectiveShareA,
   };
   const impulseB = {
-    x: -direction.x * shareB,
-    y: -direction.y * shareB,
-    z: -direction.z * shareB,
+    x: -direction.x * correction * effectiveShareB,
+    y: -direction.y * correction * effectiveShareB,
+    z: -direction.z * correction * effectiveShareB,
   };
 
-  if (!aAnchored && isSafePlayerPosition(playerA.dimension, playerA.location)) {
+  if (aAnchored && impulseA.y < 0) impulseA.y = 0;
+  if (bAnchored && impulseB.y < 0) impulseB.y = 0;
+  if (responseA > 0 && isSafePlayerPosition(playerA.dimension, playerA.location)) {
     queueImpulse(pendingImpulses, playerA, impulseA);
   }
-  if (!bAnchored && isSafePlayerPosition(playerB.dimension, playerB.location)) {
+  if (responseB > 0 && isSafePlayerPosition(playerB.dimension, playerB.location)) {
     queueImpulse(pendingImpulses, playerB, impulseB);
   }
 }

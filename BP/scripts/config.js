@@ -11,6 +11,8 @@ export const MOVE_BUDGET_PER_TICK = 6; // safety cap: max number of rope-trigger
 export const ROPE_STRETCH_STRENGTH = 0.2; // inward impulse per block of rope stretch
 export const MAX_ROPE_STRETCH_IMPULSE = 0.8; // prevents a large overshoot from causing a harsh snap
 export const TRAILING_PLAYER_PULL_SHARE = 0.75; // most taut-rope impulse pulls the passive/trailing player
+export const SNEAK_ROPE_MOBILITY = 0.25; // sneaking players respond at 25% strength, rather than becoming anchors
+export const ROPE_BOUNDARY_LEAD_TICKS = 1; // predict one physics step to catch the limit before visible stretching
 export const PARTICLE_ENDPOINT_OFFSET = 0.7; // keeps particles outside the player's hitbox
 export const PARTICLE_BODY_HEIGHT = 0.9; // attach the visible rope near the player's torso, not feet/head
 

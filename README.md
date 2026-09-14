@@ -48,10 +48,11 @@ command in-game:
   asymmetric: the runner receives a smaller opposing impulse and the passive
   player receives the larger pull. This approximates momentum transfer through
   a real rope while keeping the runner mobile.
-- **Sneak (shift) to brace yourself as an anchor**: a sneaking player receives
-  no rope impulse, and the other player receives the full outward-velocity
-  correction. If both players sneak, neither is moved by the velocity
-  constraint.
+- **Sneak (shift) to brace yourself**: a sneaking player remains part of the
+  rope constraint but responds at 25% mobility. The remaining correction is
+  transferred to the other player, so sneaking makes the player harder to
+  pull without disconnecting the rope. Downward rope impulses are suppressed
+  for the sneaking player, allowing them to brace on a block or ledge.
 - The velocity constraint is the only normal distance correction: players are
   never teleported a small amount by rope physics. Large sudden jumps
   (movement greater than `TELEPORT_JUMP_THRESHOLD`, such as an ender pearl or
@@ -63,7 +64,7 @@ command in-game:
 
 ## Tuning
 All the numbers that matter live in one file: `BP/scripts/config.js` —
-maximum distance, positional safety margin, particle look, sound, etc.
+maximum distance, rope response, particle look, sound, etc.
 Edit that file and reload the world; no other file needs to change.
 
 Two values affect how the hard limit *feels*, worth knowing about if you
@@ -86,17 +87,18 @@ looks broken out of the box. To swap in your own art:
   receive occasional server correction. The rope uses per-tick radial
   impulses and never performs small positional teleports, which keeps the
   correction smoother and lets the pair swing naturally.
-- Clamp and follow destinations are checked against the player's occupied
-  space and shifted to a nearby clear position when possible. Extremely
-  enclosed spaces can still prevent a safe correction.
+- Follow destinations for dimension changes and large external teleports are
+  checked against the player's occupied space and shifted to a nearby clear
+  position when possible. Extremely enclosed spaces can still prevent a safe
+  correction.
 - Rope impulses are combined per player before being applied. If a player is
   already inside a block, rope movement is suspended until a clear recovery
   position exists; the rope never uses force to push their feet, body, or head
   through solid blocks. A sealed one-block hole therefore requires a
   separate teleport or manual escape.
-- Normal rope movement is velocity-based in 3D. Only outward radial relative
-  velocity is removed at the limit; perpendicular movement and inward
-  movement are not damped.
+- Normal rope movement is velocity-based in 3D. The solver predicts one tick
+  ahead at the boundary, transfers radial tension between the endpoints, and
+  leaves perpendicular movement and inward movement undamped.
 - Same-dimension teleport detection is a "big position jump" heuristic —
   can misfire on legitimate very fast movement, but works for the common
   cases (ender pearls, commands).
