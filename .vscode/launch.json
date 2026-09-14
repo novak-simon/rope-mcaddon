@@ -1,0 +1,14 @@
+{
+  "version": "0.3.0",
+  "configurations": [
+    {
+      "type": "minecraft-js",
+      "request": "attach",
+      "name": "Debug Rope Addon with Minecraft",
+      "mode": "listen",
+      "targetModuleUuid": "5f378c61-a33b-4444-98da-38fceaa7722d",
+      "localRoot": "${workspaceFolder}/BP",
+      "port": 19144
+    }
+  ]
+}

@@ -65,6 +65,27 @@ command in-game:
   dimension change (portal, respawn anchor) pulls the tied partner along
   instead of being treated as a clamp.
 
+## Script debugging
+
+This workspace includes a VS Code listen configuration at
+`.vscode/launch.json`. To debug the behavior-pack script:
+
+1. Run the Windows loopback exemption command once in PowerShell or Command
+   Prompt (use the Bedrock Preview command instead if you use Preview):
+
+   ```
+   CheckNetIsolation.exe LoopbackExempt -a -p=S-1-15-2-1958404141-86561845-1752920682-3514627264-368642714-62675701-733520436
+   ```
+2. Open this repository in VS Code and press `F5`, selecting
+   **Debug Rope Addon with Minecraft**.
+3. Enter a world with this behavior pack active.
+4. Run `/script debugger connect` in the world chat/console. The expected
+   response is `Debugger connected to host`.
+5. Set breakpoints in `BP/scripts/` and exercise the rope in-game.
+
+The debugger listens on port `19144`. This project has no build step, so the
+configuration maps the JavaScript source directly from `BP/`.
+
 ## Tuning
 All the numbers that matter live in one file: `BP/scripts/config.js` —
 maximum distance, rope response, particle look, sound, etc.
