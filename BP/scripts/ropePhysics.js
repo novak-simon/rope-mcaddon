@@ -156,20 +156,28 @@ function teleportFollowerTo(follower, target) {
  * partner remain free. applyImpulse is the Bedrock API's velocity mutation;
  * for equal-mass players it provides the symmetric half impulse below.
  */
-function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB) {
+function constrainOutwardVelocity(
+  pendingImpulses,
+  playerA,
+  playerB,
+  posA,
+  posB,
+  previousPosA,
+  previousPosB
+) {
   const dx = posB.x - posA.x;
   const dy = posB.y - posA.y;
   const dz = posB.z - posA.z;
   const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
   if (distance < 0.001) return;
 
-  let velocityA;
-  let velocityB;
+  let velocityA = { x: 0, y: 0, z: 0 };
+  let velocityB = { x: 0, y: 0, z: 0 };
   try {
     velocityA = playerA.getVelocity();
     velocityB = playerB.getVelocity();
   } catch {
-    return;
+    // Position deltas below still provide a usable motion estimate.
   }
 
   const direction = {
@@ -192,13 +200,33 @@ function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB)
   const mobilityA = aAnchored ? SNEAK_ROPE_MOBILITY : 1;
   const mobilityB = bAnchored ? SNEAK_ROPE_MOBILITY : 1;
   const tickSeconds = TICK_INTERVAL / 20;
+  const measuredVelocityA = {
+    x: (posA.x - previousPosA.x) / tickSeconds,
+    y: (posA.y - previousPosA.y) / tickSeconds,
+    z: (posA.z - previousPosA.z) / tickSeconds,
+  };
+  const measuredVelocityB = {
+    x: (posB.x - previousPosB.x) / tickSeconds,
+    y: (posB.y - previousPosB.y) / tickSeconds,
+    z: (posB.z - previousPosB.z) / tickSeconds,
+  };
+  const measuredRadialVelocity =
+    (measuredVelocityB.x - measuredVelocityA.x) * direction.x +
+    (measuredVelocityB.y - measuredVelocityA.y) * direction.y +
+    (measuredVelocityB.z - measuredVelocityA.z) * direction.z;
+  const effectiveRadialVelocity = Math.max(
+    radialVelocity,
+    measuredRadialVelocity
+  );
 
   // Predict the next boundary crossing. This lets the constraint transfer
   // motion before a stationary partner is visibly left behind.
   const predictedExcess = Math.max(
     0,
-    distance + Math.max(0, radialVelocity) * tickSeconds *
-      ROPE_BOUNDARY_LEAD_TICKS -
+    distance +
+      Math.max(0, effectiveRadialVelocity) *
+        tickSeconds *
+        ROPE_BOUNDARY_LEAD_TICKS -
       MAX_DISTANCE
   );
   const currentStretch = Math.max(0, distance - MAX_DISTANCE);
@@ -210,7 +238,7 @@ function constrainOutwardVelocity(pendingImpulses, playerA, playerB, posA, posB)
     distance >= MAX_DISTANCE || predictedExcess > 0
       ? Math.min(
           MAX_ROPE_IMPULSE,
-          Math.max(0, radialVelocity) * ROPE_RADIAL_RESPONSE +
+          Math.max(0, effectiveRadialVelocity) * ROPE_RADIAL_RESPONSE +
             predictedExcess * ROPE_STRETCH_STRENGTH
         )
       : 0;
@@ -344,7 +372,9 @@ export function runRopeTick(tickCount) {
         playerA,
         playerB,
         posA,
-        posB
+        posB,
+        state.lastPosA,
+        state.lastPosB
       );
       if (!state.taut) {
         playTautSound(playerA);
