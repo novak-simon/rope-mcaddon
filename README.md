@@ -98,16 +98,6 @@ tune them:
 - `ROPE_RADIAL_RESPONSE`, `MAX_ROPE_IMPULSE`, and
   `MAX_ROPE_VERTICAL_IMPULSE` — control taut-rope damping and safety caps.
 
-## Adding your own texture
-The item currently uses a placeholder icon (a simple brown line) so nothing
-looks broken out of the box. To swap in your own art:
-1. Make a 16×16 (or 32×32/64×64 — any power-of-two square works) PNG.
-2. Replace `RP/textures/items/rope_tether_item.png` with your file, keeping
-   the exact same filename.
-3. Re-import/re-copy just that one file — nothing else needs to change,
-   since the item JSON and texture mapping already point at it.
-
-## Giving yourself the rope item
 ## Known limitations (accepted for this project's scope)
 - Bedrock predicts player movement client-side, so rope impulses can still
   receive occasional server correction. The rope uses per-tick radial
